@@ -1,0 +1,13 @@
+[simulator]
+profile = "balanced_self_play"
+defender_fov_min_degrees = 35.0
+defender_fov_max_degrees = 75.0
+defender_camp_radius = 180.0
+defender_camp_penalty = 0.001
+detection_reward = 0.05
+capture_reward = 1.75
+tracking_reward = 0.0
+closing_reward = 0.0
+
+[ppo]
+snapshot_interval = 10

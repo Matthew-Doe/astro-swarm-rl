@@ -94,6 +94,7 @@ var _sweep_first_goal: float = -1.0
 var _sweep_first_frames: Array = []
 var _sweep_seeds: Array = []
 var _recording: bool = true
+var _record_replays: bool = true
 
 var _collisions: bool = false
 
@@ -164,6 +165,8 @@ func parse_args():
 			_level_id = arg.split("=", true, 1)[1]
 		elif arg.begins_with("--collisions="):
 			_collisions = int(arg.split("=", true, 1)[1]) != 0
+		elif arg.begins_with("--record-replays="):
+			_record_replays = int(arg.split("=", true, 1)[1]) != 0
 	if _algorithm.is_empty():
 		_algorithm = SIM.normalize_to_scripts(PlayerData.DEFAULT_SHIP_BLOCKS)
 	if _placements.size() > MAX_DEFENDERS:
@@ -243,12 +246,12 @@ func _start_match():
 	var placements: Array
 	var spawn_pos: Vector2
 	if _phase == Phase.PLACEMENT:
-		_recording = true
+		_recording = _record_replays
 		placements = _placements_for_trial(_current_trial)
 		spawn_pos = _spawn_points[_current_trial % _spawn_points.size()]
 		seed(_seed + _current_trial)
 	else:
-		_recording = _current_trial == 0
+		_recording = _record_replays and _current_trial == 0
 		placements = _ring_placements(_sweep_n)
 		spawn_pos = _enemy_start
 		seed(_sweep_trial_seed(_current_trial) + SWEEP_MATCH_OFFSET + _sweep_n)

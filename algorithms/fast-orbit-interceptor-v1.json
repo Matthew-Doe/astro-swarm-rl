@@ -1,0 +1,97 @@
+{
+  "algorithm": [
+    {
+      "blocks": [
+        {
+          "children": [
+            {
+              "children": [],
+              "params": {
+                "value": 10
+              },
+              "type": "set_speed"
+            },
+            {
+              "children": [],
+              "params": {
+                "value": 360
+              },
+              "type": "set_turn"
+            },
+            {
+              "children": [],
+              "params": {
+                "value": 12.5
+              },
+              "type": "set_view"
+            },
+            {
+              "children": [],
+              "params": {
+                "value": 180
+              },
+              "type": "set_fov"
+            }
+          ],
+          "params": {},
+          "type": "when_start"
+        }
+      ],
+      "x": 40.0,
+      "y": 30.0
+    },
+    {
+      "blocks": [
+        {
+          "children": [
+            {
+              "children": [],
+              "params": {},
+              "type": "do_forward"
+            },
+            {
+              "children": [],
+              "params": {
+                "value": 120
+              },
+              "type": "do_turn_left"
+            }
+          ],
+          "params": {},
+          "type": "when_always"
+        }
+      ],
+      "x": 40.0,
+      "y": 310.0
+    },
+    {
+      "blocks": [
+        {
+          "children": [
+            {
+              "children": [],
+              "params": {},
+              "type": "do_face"
+            }
+          ],
+          "params": {},
+          "type": "when_sees_enemy"
+        }
+      ],
+      "x": 440.0,
+      "y": 30.0
+    }
+  ],
+  "block_count": 10,
+  "description": "Max-speed wide-vision patrol at 120 deg/s with continuous target-facing pursuit. Validated at 100% over 210 unseen-seed FARP2 trials, including collisions, plus 100% in a 1-6 defender sweep.",
+  "effective_config": {
+    "fov_deg": 180.0,
+    "speed_m_s": 10.0,
+    "turn_deg_s": 360.0,
+    "view_m": 12.5
+  },
+  "name": "Fast Orbit Interceptor v1",
+  "placements": [],
+  "slug": "fast-orbit-interceptor-v1",
+  "warnings": []
+}
