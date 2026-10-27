@@ -109,6 +109,7 @@ def policy_specs() -> dict[str, PolicySpec]:
     from .env import (
         ATTACKER_ENTITY_DIM,
         ATTACKER_OBS_DIM,
+        INTERCEPTOR_SELF_DIM,
         INTERCEPTOR_ENTITY_DIM,
         INTERCEPTOR_OBS_DIM,
         MAX_DEFENDERS,
@@ -117,7 +118,7 @@ def policy_specs() -> dict[str, PolicySpec]:
 
     return {
         "interceptor": PolicySpec(
-            "interceptor", INTERCEPTOR_OBS_DIM, SELF_DIM, MAX_DEFENDERS,
+            "interceptor", INTERCEPTOR_OBS_DIM, INTERCEPTOR_SELF_DIM, MAX_DEFENDERS,
             INTERCEPTOR_ENTITY_DIM, 10, ATTACKER_OBS_DIM,
         ),
         "attacker": PolicySpec(

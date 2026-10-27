@@ -26,6 +26,8 @@ var status := "Running"
 var quit_after_match := false
 var arena_profile := "balanced_self_play"
 var defender_count := 5
+var defender_fov_min_degrees := 35.0
+var defender_fov_max_degrees := 75.0
 var paused := false
 var finished_at_msec := -1
 var match_count := 0
@@ -46,6 +48,11 @@ func _ready() -> void:
 		attacker_policy.profile if attacker_policy != null else "balanced_self_play"
 	)
 	arena_profile = str(options.get("profile", policy_profile))
+	var simulator: Dictionary = interceptor_policy.simulator if interceptor_policy != null else (
+		attacker_policy.simulator if attacker_policy != null else {}
+	)
+	defender_fov_min_degrees = float(simulator.get("defender_fov_min_degrees", 35.0))
+	defender_fov_max_degrees = float(simulator.get("defender_fov_max_degrees", 75.0))
 	defender_count = clampi(int(options.get("defenders", "5")), 1, MAX_DEFENDERS)
 	_reset_match()
 	set_physics_process(true)
@@ -105,7 +112,7 @@ func _reset_match() -> void:
 			"speed": 136.0 if arena_profile == "farp_parity" else rng.randf_range(130.0, 180.0),
 			"turn_rate": 3.2 if arena_profile == "farp_parity" else rng.randf_range(2.8, 3.8),
 			"view": 180.0 if arena_profile == "farp_parity" else 180.0 + 120.0 * sensor_budget,
-			"fov": deg_to_rad(50.0 if arena_profile == "farp_parity" else 150.0 - 80.0 * sensor_budget),
+			"fov": deg_to_rad(50.0 if arena_profile == "farp_parity" else lerpf(defender_fov_max_degrees, defender_fov_min_degrees, sensor_budget)),
 			"sees": false,
 			"previous": Vector2.ZERO,
 		})

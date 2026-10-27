@@ -141,8 +141,8 @@ def command_export(args) -> int:
     payload, interceptor, attacker = _load_models(args.checkpoint, "cpu")
     specs = policy_specs()
     profile = payload["simulator"]["profile"]
-    export_actor(interceptor, specs["interceptor"], args.output / "interceptor.policy.json", profile)
-    export_actor(attacker, specs["attacker"], args.output / "attacker.policy.json", profile)
+    export_actor(interceptor, specs["interceptor"], args.output / "interceptor.policy.json", profile, simulator=payload["simulator"])
+    export_actor(attacker, specs["attacker"], args.output / "attacker.policy.json", profile, simulator=payload["simulator"])
     print(args.output)
     return 0
 

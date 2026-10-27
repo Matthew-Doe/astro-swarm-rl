@@ -51,6 +51,8 @@ class SelfPlayTrainer:
         device: str = "cuda",
         seed: int = 1,
     ) -> None:
+        if simulator.closing_potential_shaping and simulator.closing_reward > 0 and abs(simulator.reward_shaping_gamma - ppo.gamma) > 1.0e-9:
+            raise ValueError("reward_shaping_gamma must match PPO gamma for potential shaping")
         self.torch = require_torch()
         self.device = self.torch.device(device)
         self.simulator_config = simulator

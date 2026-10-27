@@ -37,8 +37,16 @@ SimulatorConfig config_from_dict(const py::dict& values) {
     config.defender_camp_penalty = get("defender_camp_penalty", config.defender_camp_penalty);
     config.detection_reward = get("detection_reward", config.detection_reward);
     config.capture_reward = get("capture_reward", config.capture_reward);
+    config.clean_goal_reward = get("clean_goal_reward", config.clean_goal_reward);
     config.tracking_reward = get("tracking_reward", config.tracking_reward);
     config.closing_reward = get("closing_reward", config.closing_reward);
+    config.defender_camp_conditional = get("defender_camp_conditional", config.defender_camp_conditional);
+    config.defender_camp_grace_seconds = get("defender_camp_grace_seconds", config.defender_camp_grace_seconds);
+    config.tracking_team_contact = get("tracking_team_contact", config.tracking_team_contact);
+    config.tracking_reward_cap = get("tracking_reward_cap", config.tracking_reward_cap);
+    config.closing_potential_shaping = get("closing_potential_shaping", config.closing_potential_shaping);
+    config.reward_shaping_gamma = get("reward_shaping_gamma", config.reward_shaping_gamma);
+    config.timeout_reward = get("timeout_reward", config.timeout_reward);
     config.seed = get("seed", config.seed);
     return config;
 }
@@ -63,6 +71,7 @@ PYBIND11_MODULE(_native, module) {
     module.attr("INTERCEPTOR_OBS_DIM") = astroswarm::rl::kInterceptorObsDim;
     module.attr("ATTACKER_OBS_DIM") = astroswarm::rl::kAttackerObsDim;
     module.attr("SELF_DIM") = astroswarm::rl::kSelfDim;
+    module.attr("INTERCEPTOR_SELF_DIM") = astroswarm::rl::kInterceptorSelfDim;
     module.attr("INTERCEPTOR_ENTITY_DIM") = astroswarm::rl::kInterceptorEntityDim;
     module.attr("ATTACKER_ENTITY_DIM") = astroswarm::rl::kAttackerEntityDim;
 

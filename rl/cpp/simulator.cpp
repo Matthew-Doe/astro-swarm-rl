@@ -58,10 +58,15 @@ BatchedSimulator::BatchedSimulator(SimulatorConfig config) : config_(std::move(c
     }
     if (config_.defender_camp_radius < 0.0F || config_.defender_camp_penalty < 0.0F ||
         config_.detection_reward < 0.0F || config_.capture_reward < 0.0F ||
-        config_.tracking_reward < 0.0F || config_.closing_reward < 0.0F) {
+        config_.tracking_reward < 0.0F || config_.closing_reward < 0.0F ||
+        config_.clean_goal_reward < 0.0F || config_.defender_camp_grace_seconds < 0.0F ||
+        config_.tracking_reward_cap < 0.0F || config_.timeout_reward < 0.0F) {
         throw std::invalid_argument("reward magnitudes and camp radius must be non-negative");
     }
 
+    if (!(config_.reward_shaping_gamma > 0.0F && config_.reward_shaping_gamma <= 1.0F)) {
+        throw std::invalid_argument("reward_shaping_gamma must be in (0, 1]");
+    }
     const auto envs = config_.num_envs;
     const auto defenders = envs * kMaxDefenders;
     defender_x_.resize(defenders); defender_y_.resize(defenders); defender_heading_.resize(defenders);
@@ -70,11 +75,16 @@ BatchedSimulator::BatchedSimulator(SimulatorConfig config) : config_(std::move(c
     defender_turn_.resize(defenders); defender_view_.resize(defenders); defender_fov_.resize(defenders);
     defender_fov_cos_half_.resize(defenders);
     defender_prev_throttle_.resize(defenders); defender_prev_turn_.resize(defenders);
+    defender_idle_ticks_.resize(defenders);
+    tracking_reward_paid_.resize(envs);
     defender_mask_.resize(defenders); defender_sees_attacker_.resize(defenders);
     attacker_x_.resize(envs); attacker_y_.resize(envs); attacker_heading_.resize(envs);
     attacker_cos_.resize(envs); attacker_sin_.resize(envs);
     attacker_vx_.resize(envs); attacker_vy_.resize(envs); attacker_speed_.resize(envs); attacker_turn_.resize(envs);
     attacker_prev_throttle_.resize(envs); attacker_prev_turn_.resize(envs);
+    last_attacker_dx_.resize(defenders); last_attacker_dy_.resize(defenders);
+    last_attacker_vx_.resize(defenders); last_attacker_vy_.resize(defenders);
+    last_attacker_age_.resize(defenders);
     detected_.resize(envs); terminated_.resize(envs); truncated_.resize(envs); outcome_.resize(envs);
     elapsed_ticks_.resize(envs); episode_index_.resize(envs); rng_state_.resize(envs); rng_stream_.resize(envs);
     interceptor_reward_.resize(envs); attacker_reward_.resize(envs);
@@ -147,6 +157,7 @@ void BatchedSimulator::reset_env(std::size_t env) noexcept {
         seed_env(env, config_.seed + static_cast<std::uint64_t>(episode_index_[env]) * 0xA24BAED4963EE407ULL);
     }
     ++episode_index_[env];
+    tracking_reward_paid_[env] = 0.0F;
     elapsed_ticks_[env] = 0;
     detected_[env] = 0; terminated_[env] = 0; truncated_[env] = 0;
     outcome_[env] = static_cast<std::uint8_t>(Outcome::Active);
@@ -171,10 +182,14 @@ void BatchedSimulator::reset_env(std::size_t env) noexcept {
 
     for (std::size_t d = 0; d < kMaxDefenders; ++d) {
         const auto index = di(env, d);
+        defender_idle_ticks_[index] = 0;
         defender_mask_[index] = d < count ? 1 : 0;
         defender_sees_attacker_[index] = 0;
         defender_prev_throttle_[index] = 0.0F;
         defender_prev_turn_[index] = 0.0F;
+        last_attacker_dx_[index] = last_attacker_dy_[index] = 0.0F;
+        last_attacker_vx_[index] = last_attacker_vy_[index] = 0.0F;
+        last_attacker_age_[index] = 0;
         defender_vx_[index] = 0.0F; defender_vy_[index] = 0.0F;
         if (d >= count) {
             defender_x_[index] = defender_y_[index] = defender_heading_[index] = 0.0F;
@@ -271,6 +286,8 @@ void BatchedSimulator::step_env(std::size_t env, const float* interceptor_action
     detection_reward_[env] = 0.0F;
     terminal_reward_[env] = 0.0F;
     camp_reward_[env] = 0.0F;
+    tracking_reward_[env] = 0.0F;
+    closing_reward_[env] = 0.0F;
     if (terminated_[env] || truncated_[env]) return;
     const float old_potential = attacker_potential(env);
     bool newly_detected = false;
@@ -285,6 +302,7 @@ void BatchedSimulator::step_env(std::size_t env, const float* interceptor_action
             closest_distance_before, distance(defender_x_[index], defender_y_[index], attacker_x_[env], attacker_y_[env]));
     }
     float tracked_fraction_sum = 0.0F;
+    float camping_fraction_sum = 0.0F;
 
     for (std::uint32_t repeat = 0; repeat < config_.action_repeat; ++repeat) {
         for (std::size_t d = 0; d < kMaxDefenders; ++d) {
@@ -355,19 +373,37 @@ void BatchedSimulator::step_env(std::size_t env, const float* interceptor_action
 
         bool captured = false;
         std::size_t tracked_defenders = 0;
+        std::size_t camping_defenders = 0;
         for (std::size_t d = 0; d < kMaxDefenders; ++d) {
             const auto index = di(env, d);
             if (!defender_mask_[index]) continue;
             const bool sees = visible(env, d, attacker_x_[env], attacker_y_[env]);
             defender_sees_attacker_[index] = sees ? 1 : 0;
+            if (sees) {
+                last_attacker_dx_[index] = (attacker_x_[env] - defender_x_[index]) / kSpawnRadius;
+                last_attacker_dy_[index] = (attacker_y_[env] - defender_y_[index]) / kSpawnRadius;
+                last_attacker_vx_[index] = (attacker_vx_[env] - defender_vx_[index]) / 400.0F;
+                last_attacker_vy_[index] = (attacker_vy_[env] - defender_vy_[index]) / 400.0F;
+                last_attacker_age_[index] = 0;
+            } else if (last_attacker_age_[index] < 255U) {
+                ++last_attacker_age_[index];
+            }
             tracked_defenders += sees ? 1U : 0U;
+            if (config_.defender_camp_conditional) {
+                const bool idle = !sees && std::abs(defender_prev_throttle_[index]) < 0.2F &&
+                    distance(defender_x_[index], defender_y_[index], kPlanetX, kPlanetY) < config_.defender_camp_radius;
+                defender_idle_ticks_[index] = idle ? defender_idle_ticks_[index] + 1U : 0U;
+                camping_defenders += static_cast<float>(defender_idle_ticks_[index]) >
+                    config_.defender_camp_grace_seconds * 60.0F ? 1U : 0U;
+            }
             if (sees && !detected_[env]) newly_detected = true;
             const float capture_dx = defender_x_[index] - attacker_x_[env];
             const float capture_dy = defender_y_[index] - attacker_y_[env];
             captured = captured || capture_dx * capture_dx + capture_dy * capture_dy <= kCaptureRadius * kCaptureRadius;
         }
-        tracked_fraction_sum += active_defenders == 0 ? 0.0F :
+        tracked_fraction_sum += config_.tracking_team_contact ? (tracked_defenders > 0 ? 1.0F : 0.0F) :
             static_cast<float>(tracked_defenders) / static_cast<float>(active_defenders);
+        camping_fraction_sum += static_cast<float>(camping_defenders) / static_cast<float>(active_defenders);
         if (newly_detected) detected_[env] = 1;
 
         if (captured) {
@@ -383,7 +419,8 @@ void BatchedSimulator::step_env(std::size_t env, const float* interceptor_action
         if (goal_dx * goal_dx + goal_dy * goal_dy <= kGoalRadius * kGoalRadius) {
             terminated_[env] = 1;
             outcome_[env] = static_cast<std::uint8_t>(Outcome::AttackerGoal);
-            const float goal_reward = detected_[env] ? 1.0F : 1.1F;
+            // Detection is sticky for the episode, including the goal tick.
+            const float goal_reward = detected_[env] ? 1.0F : config_.clean_goal_reward;
             attacker_reward_[env] += goal_reward;
             interceptor_reward_[env] -= goal_reward;
             terminal_reward_[env] += goal_reward;
@@ -392,9 +429,9 @@ void BatchedSimulator::step_env(std::size_t env, const float* interceptor_action
         if (elapsed_ticks_[env] >= static_cast<std::uint32_t>(std::ceil(config_.episode_seconds * 60.0F))) {
             truncated_[env] = 1;
             outcome_[env] = static_cast<std::uint8_t>(Outcome::Timeout);
-            interceptor_reward_[env] += 1.0F;
-            attacker_reward_[env] -= 1.0F;
-            terminal_reward_[env] -= 1.0F;
+            interceptor_reward_[env] += config_.timeout_reward;
+            attacker_reward_[env] -= config_.timeout_reward;
+            terminal_reward_[env] -= config_.timeout_reward;
             break;
         }
     }
@@ -408,16 +445,21 @@ void BatchedSimulator::step_env(std::size_t env, const float* interceptor_action
         attacker_reward_[env] -= config_.detection_reward;
         interceptor_reward_[env] += config_.detection_reward;
     }
-    if (defenders_camping) {
-        camp_reward_[env] = config_.defender_camp_penalty;
-        attacker_reward_[env] += camp_reward_[env];
-        interceptor_reward_[env] -= camp_reward_[env];
+    const float repeats = static_cast<float>(config_.action_repeat);
+    camp_reward_[env] = config_.defender_camp_penalty * (config_.defender_camp_conditional ?
+        camping_fraction_sum / repeats : (defenders_camping ? 1.0F : 0.0F));
+    attacker_reward_[env] += camp_reward_[env];
+    interceptor_reward_[env] -= camp_reward_[env];
+    float tracking_payment = config_.tracking_reward * tracked_fraction_sum / repeats;
+    if (config_.tracking_reward_cap > 0.0F) {
+        tracking_payment = std::min(tracking_payment,
+            std::max(0.0F, config_.tracking_reward_cap - tracking_reward_paid_[env]));
     }
-    tracking_reward_[env] = -config_.tracking_reward * tracked_fraction_sum /
-        static_cast<float>(std::max<std::uint32_t>(1U, config_.action_repeat));
+    tracking_reward_paid_[env] += tracking_payment;
+    tracking_reward_[env] = -tracking_payment;
     attacker_reward_[env] += tracking_reward_[env];
     interceptor_reward_[env] -= tracking_reward_[env];
-    float closest_distance_after = closest_distance_before;
+    float closest_distance_after = std::numeric_limits<float>::max();
     for (std::size_t d = 0; d < kMaxDefenders; ++d) {
         const auto index = di(env, d);
         if (!defender_mask_[index]) continue;
@@ -425,7 +467,16 @@ void BatchedSimulator::step_env(std::size_t env, const float* interceptor_action
             closest_distance_after, distance(defender_x_[index], defender_y_[index], attacker_x_[env], attacker_y_[env]));
     }
     const float closing_delta = (closest_distance_before - closest_distance_after) / kSpawnRadius;
-    closing_reward_[env] = -config_.closing_reward * std::clamp(closing_delta, -1.0F, 1.0F);
+    if (config_.closing_potential_shaping) {
+        // Bounded team pursuit potential. Use PPO's decision-step discount and
+        // zero potential for all terminal states (timeouts are terminal in GAE).
+        const float before = 1.0F - std::clamp(closest_distance_before / kSpawnRadius, 0.0F, 1.0F);
+        const float after = (terminated_[env] || truncated_[env]) ? 0.0F :
+            1.0F - std::clamp(closest_distance_after / kSpawnRadius, 0.0F, 1.0F);
+        closing_reward_[env] = -config_.closing_reward * (config_.reward_shaping_gamma * after - before);
+    } else {
+        closing_reward_[env] = -config_.closing_reward * std::clamp(closing_delta, -1.0F, 1.0F);
+    }
     attacker_reward_[env] += closing_reward_[env];
     interceptor_reward_[env] -= closing_reward_[env];
 }
@@ -456,6 +507,9 @@ void BatchedSimulator::build_observation(std::size_t env) noexcept {
         out[6] = defender_y_[index] / kArenaHeight; out[7] = (kArenaHeight - defender_y_[index]) / kArenaHeight;
         out[8] = remaining; out[9] = static_cast<float>(active_count) / 6.0F;
         out[10] = defender_prev_throttle_[index]; out[11] = defender_prev_turn_[index];
+        out[12] = last_attacker_dx_[index]; out[13] = last_attacker_dy_[index];
+        out[14] = last_attacker_vx_[index]; out[15] = last_attacker_vy_[index];
+        out[16] = std::min(1.0F, static_cast<float>(last_attacker_age_[index]) / 120.0F);
 
         for (std::size_t slot = 0; slot < kMaxDefenders; ++slot) {
             bool is_enemy = slot == 0;
@@ -487,7 +541,7 @@ void BatchedSimulator::build_observation(std::size_t env) noexcept {
             const float bearing_cos = (defender_cos_[index] * dx + defender_sin_[index] * dy) * inverse_distance;
             const float target_sin = is_enemy ? attacker_sin_[env] : defender_sin_[di(env, other)];
             const float target_cos = is_enemy ? attacker_cos_[env] : defender_cos_[di(env, other)];
-            const auto offset = kSelfDim + slot * kInterceptorEntityDim;
+            const auto offset = kInterceptorSelfDim + slot * kInterceptorEntityDim;
             out[offset + 0] = dx / kSpawnRadius; out[offset + 1] = dy / kSpawnRadius;
             out[offset + 2] = (tvx - defender_vx_[index]) / 400.0F;
             out[offset + 3] = (tvy - defender_vy_[index]) / 400.0F;

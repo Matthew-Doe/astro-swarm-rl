@@ -25,7 +25,7 @@ def _linear_layers(module) -> list[dict[str, Any]]:
     return layers
 
 
-def export_actor(model, spec: PolicySpec, destination: Path, profile: str) -> dict[str, Any]:
+def export_actor(model, spec: PolicySpec, destination: Path, profile: str, *, simulator: dict[str, Any] | None = None) -> dict[str, Any]:
     actor = model.actor
     payload: dict[str, Any] = {
         "format": "astroswarm-policy",
@@ -54,6 +54,8 @@ def export_actor(model, spec: PolicySpec, destination: Path, profile: str) -> di
         },
         "normalization": {"kind": "fixed", "coordinates": "planet-centered-and-scaled"},
     }
+    if simulator is not None:
+        payload["simulator"] = simulator
     canonical = json.dumps(payload, separators=(",", ":"), sort_keys=True)
     payload["sha256"] = hashlib.sha256(canonical.encode()).hexdigest()
     destination.parent.mkdir(parents=True, exist_ok=True)

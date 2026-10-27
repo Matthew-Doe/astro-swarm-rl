@@ -11,6 +11,7 @@ MAX_DEFENDERS = int(_native.MAX_DEFENDERS)
 INTERCEPTOR_OBS_DIM = int(_native.INTERCEPTOR_OBS_DIM)
 ATTACKER_OBS_DIM = int(_native.ATTACKER_OBS_DIM)
 SELF_DIM = int(_native.SELF_DIM)
+INTERCEPTOR_SELF_DIM = int(_native.INTERCEPTOR_SELF_DIM)
 INTERCEPTOR_ENTITY_DIM = int(_native.INTERCEPTOR_ENTITY_DIM)
 ATTACKER_ENTITY_DIM = int(_native.ATTACKER_ENTITY_DIM)
 
@@ -32,8 +33,16 @@ class SimulatorConfig:
     defender_camp_penalty: float = 0.001
     detection_reward: float = 0.05
     capture_reward: float = 1.0
+    clean_goal_reward: float = 1.1
     tracking_reward: float = 0.0
     closing_reward: float = 0.0
+    defender_camp_conditional: bool = False
+    defender_camp_grace_seconds: float = 0.0
+    tracking_team_contact: bool = False
+    tracking_reward_cap: float = 0.0
+    closing_potential_shaping: bool = False
+    reward_shaping_gamma: float = 0.995
+    timeout_reward: float = 1.0
     seed: int = 1
 
 

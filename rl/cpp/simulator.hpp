@@ -10,8 +10,9 @@ namespace astroswarm::rl {
 inline constexpr std::size_t kMaxDefenders = 6;
 inline constexpr std::size_t kActionDim = 2;
 inline constexpr std::size_t kSelfDim = 12;
+inline constexpr std::size_t kInterceptorSelfDim = 17;
 inline constexpr std::size_t kInterceptorEntityDim = 11;
-inline constexpr std::size_t kInterceptorObsDim = kSelfDim + kMaxDefenders * kInterceptorEntityDim;
+inline constexpr std::size_t kInterceptorObsDim = kInterceptorSelfDim + kMaxDefenders * kInterceptorEntityDim;
 inline constexpr std::size_t kAttackerEntityDim = 13;
 inline constexpr std::size_t kAttackerObsDim = kSelfDim + kMaxDefenders * kAttackerEntityDim;
 
@@ -34,8 +35,16 @@ struct SimulatorConfig {
     float defender_camp_penalty = 0.001F;
     float detection_reward = 0.05F;
     float capture_reward = 1.0F;
+    float clean_goal_reward = 1.1F;
     float tracking_reward = 0.0F;
     float closing_reward = 0.0F;
+    bool defender_camp_conditional = false;
+    float defender_camp_grace_seconds = 0.0F;
+    bool tracking_team_contact = false;
+    float tracking_reward_cap = 0.0F;
+    bool closing_potential_shaping = false;
+    float reward_shaping_gamma = 0.995F;
+    float timeout_reward = 1.0F;
     std::uint64_t seed = 1;
 };
 
@@ -87,9 +96,12 @@ private:
     std::vector<float> defender_view_, defender_fov_, defender_fov_cos_half_, defender_prev_throttle_, defender_prev_turn_;
     std::vector<float> attacker_x_, attacker_y_, attacker_heading_, attacker_cos_, attacker_sin_, attacker_vx_, attacker_vy_;
     std::vector<float> attacker_speed_, attacker_turn_, attacker_prev_throttle_, attacker_prev_turn_;
+    std::vector<float> last_attacker_dx_, last_attacker_dy_, last_attacker_vx_, last_attacker_vy_;
+    std::vector<std::uint32_t> last_attacker_age_;
     std::vector<std::uint8_t> defender_mask_, defender_sees_attacker_;
     std::vector<std::uint8_t> detected_, terminated_, truncated_, outcome_;
-    std::vector<std::uint32_t> elapsed_ticks_, episode_index_;
+    std::vector<std::uint32_t> elapsed_ticks_, episode_index_, defender_idle_ticks_;
+    std::vector<float> tracking_reward_paid_;
     std::vector<std::uint64_t> rng_state_, rng_stream_;
     std::vector<float> interceptor_reward_, attacker_reward_;
     std::vector<float> shaping_reward_, detection_reward_, terminal_reward_, camp_reward_, tracking_reward_, closing_reward_;

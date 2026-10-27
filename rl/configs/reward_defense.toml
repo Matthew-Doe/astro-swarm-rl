@@ -1,0 +1,23 @@
+# Stronger defensive learning while preserving the stealth-goal objective.
+[simulator]
+profile = "balanced_self_play"
+defender_fov_min_degrees = 35.0
+defender_fov_max_degrees = 75.0
+defender_camp_radius = 180.0
+defender_camp_penalty = 0.01
+defender_camp_conditional = true
+defender_camp_grace_seconds = 2.0
+detection_reward = 0.05
+capture_reward = 3.0
+clean_goal_reward = 5.0
+timeout_reward = 0.25
+tracking_reward = 0.003
+tracking_team_contact = true
+tracking_reward_cap = 0.3
+closing_reward = 0.5
+closing_potential_shaping = true
+reward_shaping_gamma = 0.995
+
+[ppo]
+gamma = 0.995
+snapshot_interval = 10

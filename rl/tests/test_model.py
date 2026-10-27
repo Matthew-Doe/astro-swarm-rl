@@ -63,3 +63,40 @@ def test_godot_policy_matches_torch(role, tmp_path) -> None:
     assert match is not None, completed.stdout + completed.stderr
     actual = torch.tensor([float(match.group(1)), float(match.group(2))])
     torch.testing.assert_close(actual, torch.as_tensor(expected), atol=2.0e-5, rtol=2.0e-5)
+
+
+@pytest.mark.parametrize("sensor_bounds", [None, (45.0, 55.0)])
+def test_arena_uses_exported_fov_or_legacy_defaults(sensor_bounds, tmp_path) -> None:
+    godot = shutil.which("godot")
+    if godot is None:
+        pytest.skip("Godot is not installed")
+    spec = policy_specs()["interceptor"]
+    artifact = tmp_path / "interceptor.policy.json"
+    simulator = None if sensor_bounds is None else {
+        "defender_fov_min_degrees": sensor_bounds[0], "defender_fov_max_degrees": sensor_bounds[1],
+    }
+    payload = export_actor(make_policy(spec), spec, artifact, "balanced_self_play", simulator=simulator)
+    if simulator is not None:
+        assert payload["simulator"] == simulator
+    script = tmp_path / "check_fov.gd"
+    lower, upper = sensor_bounds or (35.0, 75.0)
+    script.write_text('''extends SceneTree
+func _initialize():
+    call_deferred("check_arena")
+func check_arena():
+    var arena = load("res://simulations/rl/AIArena.gd").new()
+    root.add_child(arena)
+    for defender in arena.defenders:
+        var degrees = rad_to_deg(defender["fov"])
+        if degrees < %s - 0.001 or degrees > %s + 0.001:
+            quit(1)
+            return
+    print("FOV_OK")
+    quit(0)
+''' % (lower, upper))
+    environment = os.environ.copy()
+    environment["XDG_DATA_HOME"] = str(tmp_path / "godot-data")
+    result = subprocess.run([godot, "--headless", "--path", str(Path(__file__).resolve().parents[2]),
+                             "--script", str(script), "--", f"--interceptor-policy={artifact}"],
+                            capture_output=True, text=True, env=environment, timeout=20, check=True)
+    assert "FOV_OK" in result.stdout, result.stdout + result.stderr

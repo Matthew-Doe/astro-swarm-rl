@@ -1,0 +1,27 @@
+# Interceptor curriculum: give defenders time to learn pursuit before
+# exposing them to the full stealth-goal pressure.
+[simulator]
+profile = "balanced_self_play"
+defender_fov_min_degrees = 35.0
+defender_fov_max_degrees = 75.0
+defender_camp_radius = 180.0
+defender_camp_penalty = 0.0025
+defender_camp_conditional = true
+defender_camp_grace_seconds = 2.0
+detection_reward = 0.10
+capture_reward = 3.0
+clean_goal_reward = 1.5
+timeout_reward = 0.5
+tracking_reward = 0.003
+tracking_team_contact = true
+tracking_reward_cap = 0.3
+closing_reward = 0.5
+closing_potential_shaping = true
+reward_shaping_gamma = 0.995
+
+[ppo]
+gamma = 0.995
+bootstrap_updates = 32
+phase_updates = 4
+historical_opponent_probability = 0.35
+snapshot_interval = 10

@@ -60,3 +60,57 @@ For telemetry interpretation and the three bottleneck-remediation paths, see [`d
 The no-communication interceptor research assumptions, ablations, and metrics are documented in [`docs/no-communication-research.md`](docs/no-communication-research.md).
 
 To compare four interceptor reward changes sequentially for 15 minutes each, use `./rl/scripts/reward-sweep.sh`. It runs detection, capture-value, track-maintenance, and anti-camping variants in separate HDD-backed run directories.
+
+## Combined tracking, anti-camping, and sneaky goals
+
+`configs/reward_stealth.toml` combines tracking reward `0.003` with the 10×
+anti-camping penalty (`0.01`). Interceptor FOV stays **35–75°**. Attacker goals
+pay a terminal reward of **5.0 if never detected during the episode**, or **1.0
+if detected at any point**, including the goal tick. The interceptor team
+receives the opposite reward, preserving zero-sum training. Other shaping and
+reward components are still added separately. `clean_goal_count` tracks these
+undetected successes, and `terminal_reward_mean` includes the larger payout.
+
+```bash
+./rl/scripts/train-on-hdd.sh reward_stealth --config rl/configs/reward_stealth.toml --updates 100
+```
+
+This starts a new run with the combined settings. Resuming an older checkpoint
+retains its original simulator/PPO configuration. Configs and checkpoints that
+omit `clean_goal_reward` retain the previous clean-goal reward of `1.1`.
+
+Actor exports now include saved simulator settings so the visual arena uses the
+training FOV. Older exports without these settings fall back to 35–75° for
+`balanced_self_play`; `farp_parity` retains its fixed 50° FOV.
+
+## Defensive-learning reward preset
+
+`configs/reward_defense.toml` retains the 35–75° FOV and +5 never-detected
+attacker goal, and adds:
+
+- Capture reward **+3** to defenders; timeout reward **+0.25**.
+- Conditional anti-camping: a defender must spend **over two seconds** near the
+  planet with low throttle and no visual contact before being penalized.
+  Movement, contact, or leaving the camping radius resets that defender's timer.
+  The `0.01` team penalty scales with the fraction of active defenders camping
+  and the fraction of physics ticks in the action step that qualify.
+- Team-contact tracking reward **+0.003** per full action step with at least one
+  defender seeing the attacker. Additional observers earn no extra reward.
+  Total tracking payments are capped at **+0.3 per episode**.
+- Pursuit shaping with strength **0.5**:
+  `0.5 * (gamma * Phi(next) - Phi(current))`, where
+  `Phi = 1 - clamp(nearest_defender_distance / 1000, 0, 1)`.
+  This uses global simulator state during training, without adding actor inputs
+  or communication. All terminal potentials, including timeouts, are zero.
+  `reward_shaping_gamma` must match PPO's decision-step discount (`0.995`).
+  The existing `closing_reward_mean` metric records this term, attacker-centric.
+
+Reward components remain zero-sum. These changes retain team advantages and
+shared actors; individual credit assignment would require a separate learner
+change. Older configs default to the previous camping/tracking/timeout modes.
+Legacy distance-delta closing shaping now correctly charges for retreat as well
+as rewarding approach. Finished environments clear all per-step reward metrics.
+
+```bash
+./rl/scripts/train-on-hdd.sh reward_defense --config rl/configs/reward_defense.toml --updates 100
+```

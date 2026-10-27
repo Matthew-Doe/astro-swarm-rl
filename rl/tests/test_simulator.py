@@ -106,3 +106,59 @@ def test_camp_penalty_is_exposed_and_zero_sum() -> None:
     np.testing.assert_allclose(
         result["attacker_reward"] + result["interceptor_reward"], 0.0, atol=1.0e-6
     )
+
+
+@pytest.mark.parametrize("detection", ["never", "earlier", "goal_tick"])
+@pytest.mark.parametrize("clean_reward", [1.1, 5.0])
+def test_clean_goal_reward_requires_never_being_detected(detection, clean_reward) -> None:
+    env = make_env(num_envs=1, min_defenders=1, max_defenders=1,
+                   clean_goal_reward=clean_reward, tracking_reward=0.003,
+                   defender_camp_penalty=0.01)
+    state = env.state
+    state["attacker_x"][0] = 1920.0 + 135.0
+    state["attacker_y"][0] = 1080.0
+    state["defender_x"][0, 0] = 1920.0 + 250.0
+    state["defender_y"][0, 0] = 1080.0
+    # Face away unless testing detection on the exact goal tick.
+    state["defender_heading"][0, 0] = np.pi if detection == "goal_tick" else 0.0
+    env.arrays["detected"][0] = int(detection == "earlier")
+    result = env.step(np.zeros((1, MAX_DEFENDERS, 2), np.float32), np.zeros((1, 2), np.float32))
+
+    assert result["outcome"][0] == 2
+    assert bool(result["detected"][0]) == (detection != "never")
+    assert result["terminal_reward"][0] == pytest.approx(clean_reward if detection == "never" else 1.0)
+    np.testing.assert_allclose(result["attacker_reward"] + result["interceptor_reward"], 0, atol=1e-6)
+    components = sum(result[key] for key in ("shaping_reward", "terminal_reward", "detection_reward",
+                                           "camp_reward", "tracking_reward", "closing_reward"))
+    np.testing.assert_allclose(result["attacker_reward"], components, atol=1e-6)
+    # A finished environment cannot pay the goal bonus again.
+    next_result = env.step(np.zeros((1, MAX_DEFENDERS, 2), np.float32), np.zeros((1, 2), np.float32))
+    assert next_result["terminal_reward"][0] == 0
+    assert next_result["attacker_reward"][0] == 0
+
+
+def test_clean_goal_reward_does_not_change_capture_or_timeout() -> None:
+    for timeout in (False, True):
+        env = make_env(num_envs=1, min_defenders=1, max_defenders=1,
+                       clean_goal_reward=5.0, episode_seconds=0.001 if timeout else 20.0)
+        if not timeout:
+            env.state["defender_x"][0, 0] = env.state["attacker_x"][0]
+            env.state["defender_y"][0, 0] = env.state["attacker_y"][0]
+        result = env.step(np.zeros((1, MAX_DEFENDERS, 2), np.float32), np.zeros((1, 2), np.float32))
+        assert result["outcome"][0] == (3 if timeout else 1)
+        assert result["terminal_reward"][0] == -1.0
+
+
+def test_combined_stealth_config() -> None:
+    from pathlib import Path
+    from astroswarm_rl.cli import _load_config
+    config, ppo = _load_config(Path(__file__).parents[1] / "configs" / "reward_stealth.toml")
+    assert config.tracking_reward == 0.003
+    assert config.defender_camp_penalty == 0.01
+    assert config.clean_goal_reward == 5.0
+    assert (config.defender_fov_min_degrees, config.defender_fov_max_degrees) == (35.0, 75.0)
+    assert (ppo.minibatch_size, ppo.epochs) == (65536, 4)
+    # Older checkpoint/config dictionaries omit the new setting.
+    assert SimulatorConfig().clean_goal_reward == 1.1
+    with pytest.raises(ValueError, match="non-negative"):
+        make_env(clean_goal_reward=-1)

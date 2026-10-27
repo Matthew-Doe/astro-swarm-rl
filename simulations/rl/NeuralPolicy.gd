@@ -3,6 +3,7 @@ extends RefCounted
 
 var role: String
 var profile: String
+var simulator: Dictionary = {}
 var observation: Dictionary
 var network: Dictionary
 
@@ -16,6 +17,7 @@ func load_file(path: String) -> Error:
 		return ERR_FILE_CORRUPT
 	role = str(parsed["role"])
 	profile = str(parsed.get("profile", "balanced_self_play"))
+	simulator = parsed.get("simulator", {})
 	observation = parsed["observation"]
 	network = parsed["network"]
 	return OK
