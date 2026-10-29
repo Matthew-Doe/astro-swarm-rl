@@ -15,10 +15,11 @@ from astroswarm_rl.artifacts import export_actor
 from astroswarm_rl.model import make_policy, policy_specs
 
 
+@pytest.mark.parametrize("architecture", ["mlp", "snn"])
 @pytest.mark.parametrize("role", ["attacker", "interceptor"])
-def test_policy_shapes_and_export(role, tmp_path) -> None:
+def test_policy_shapes_and_export(role, architecture, tmp_path) -> None:
     spec = policy_specs()[role]
-    policy = make_policy(spec)
+    policy = make_policy(spec, architecture)
     batch = torch.zeros(7, spec.obs_dim)
     action, log_prob = policy.actor.sample(batch)
 
@@ -33,15 +34,20 @@ def test_policy_shapes_and_export(role, tmp_path) -> None:
     assert loaded["role"] == role
 
 
+@pytest.mark.parametrize("architecture", ["mlp", "snn"])
 @pytest.mark.parametrize("role", ["attacker", "interceptor"])
-def test_godot_policy_matches_torch(role, tmp_path) -> None:
+def test_godot_policy_matches_torch(role, architecture, tmp_path) -> None:
     godot = shutil.which("godot")
     if godot is None:
         pytest.skip("Godot is not installed")
     torch.manual_seed(23)
     spec = policy_specs()[role]
-    policy = make_policy(spec).eval()
-    observation = torch.zeros(1, spec.obs_dim)
+    policy = make_policy(spec, architecture).eval()
+    observation = torch.randn(1, spec.obs_dim)
+    entities = observation[:, spec.self_dim:].reshape(1, spec.entity_count, spec.entity_dim)
+    entities[..., spec.mask_index] = torch.arange(spec.entity_count) % 2
+    observation_file = tmp_path / "observation.json"
+    observation_file.write_text(json.dumps(observation[0].tolist()))
     expected = policy.actor(observation)[0].detach().numpy()
     artifact = tmp_path / f"{role}.policy.json"
     export_actor(policy, spec, artifact, "balanced_self_play")
@@ -51,7 +57,7 @@ def test_godot_policy_matches_torch(role, tmp_path) -> None:
     completed = subprocess.run(
         [
             godot, "--headless", "--path", str(repository), "--script",
-            "simulations/rl/PolicySmokeTest.gd", "--", str(artifact),
+            "simulations/rl/PolicySmokeTest.gd", "--", str(artifact), str(observation_file),
         ],
         check=True,
         capture_output=True,
@@ -86,6 +92,12 @@ func _initialize():
 func check_arena():
     var arena = load("res://simulations/rl/AIArena.gd").new()
     root.add_child(arena)
+    arena.defenders[0]["last_attacker"] = Vector4(0.1, 0.2, 0.3, 0.4)
+    arena.defenders[0]["last_attacker_age"] = 60
+    var observation = arena._interceptor_observation(0)
+    if observation.size() != 83 or absf(observation[12] - 0.1) > 0.00001 or absf(observation[16] - 0.5) > 0.00001:
+        quit(1)
+        return
     for defender in arena.defenders:
         var degrees = rad_to_deg(defender["fov"])
         if degrees < %s - 0.001 or degrees > %s + 0.001:
@@ -100,3 +112,22 @@ func check_arena():
                              "--script", str(script), "--", f"--interceptor-policy={artifact}"],
                             capture_output=True, text=True, env=environment, timeout=20, check=True)
     assert "FOV_OK" in result.stdout, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("role", ["attacker", "interceptor"])
+def test_snn_gradients_and_decision_reset(role):
+    torch.manual_seed(31)
+    spec = policy_specs()[role]
+    model = make_policy(spec, "snn")
+    observation = torch.randn(5, spec.obs_dim)
+    expected = model.actor(observation).detach()
+    model.actor(torch.randn_like(observation))
+    torch.testing.assert_close(model.actor(observation), expected, rtol=0, atol=0)
+    actions, old_log = model.actor.sample(observation)
+    log_prob, _ = model.actor.evaluate(observation, actions.detach())
+    torch.testing.assert_close(log_prob, old_log.detach(), atol=1e-4, rtol=1e-4)
+    (-log_prob.mean()).backward()
+    for layer in (model.actor.self_encoder[0], model.actor.trunk[0], model.actor.trunk[2]):
+        assert layer.weight.grad is not None
+        assert torch.isfinite(layer.weight.grad).all()
+        assert layer.weight.grad.abs().sum() > 0

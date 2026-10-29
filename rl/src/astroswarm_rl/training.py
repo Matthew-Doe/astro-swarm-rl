@@ -18,12 +18,16 @@ from .env import (
     orbit_interceptor_actions,
     straight_attacker_actions,
 )
+from .planner import planning_attacker_actions
 from .league import League, LeagueEntry
 from .model import make_policy, policy_specs, require_torch
 
 
 @dataclass(slots=True)
 class PPOConfig:
+    attacker_controller: str = "learned"
+    architecture: str = "mlp"
+    spike_steps: int = 8
     rollout_steps: int = 128
     gamma: float = 0.995
     gae_lambda: float = 0.95
@@ -53,6 +57,8 @@ class SelfPlayTrainer:
     ) -> None:
         if simulator.closing_potential_shaping and simulator.closing_reward > 0 and abs(simulator.reward_shaping_gamma - ppo.gamma) > 1.0e-9:
             raise ValueError("reward_shaping_gamma must match PPO gamma for potential shaping")
+        if ppo.attacker_controller not in ("learned", "planner"):
+            raise ValueError("attacker_controller must be learned or planner")
         self.torch = require_torch()
         self.device = self.torch.device(device)
         self.simulator_config = simulator
@@ -63,8 +69,8 @@ class SelfPlayTrainer:
         self.checkpoint_directory.mkdir(parents=True, exist_ok=True)
         self.env = VectorEnv(simulator)
         specs = policy_specs()
-        self.interceptor = make_policy(specs["interceptor"]).to(self.device)
-        self.attacker = make_policy(specs["attacker"]).to(self.device)
+        self.interceptor = make_policy(specs["interceptor"], ppo.architecture, ppo.spike_steps).to(self.device)
+        self.attacker = make_policy(specs["attacker"], ppo.architecture, ppo.spike_steps).to(self.device)
         self.interceptor_optimizer = self.torch.optim.Adam(
             self.interceptor.parameters(), lr=ppo.learning_rate
         )
@@ -101,12 +107,15 @@ class SelfPlayTrainer:
         )
 
     def active_role(self) -> str:
+        if self.ppo.attacker_controller == "planner":
+            return "interceptor"
         if self.update_index < self.ppo.bootstrap_updates:
             return "attacker" if self.update_index % 2 == 0 else "interceptor"
         phase = (self.update_index - self.ppo.bootstrap_updates) // self.ppo.phase_updates
         return "attacker" if phase % 2 == 0 else "interceptor"
 
-    def train(self, updates: int) -> list[dict[str, float | int | str]]:
+    def train(self, updates: int, *, max_seconds: float | None = None) -> list[dict[str, float | int | str]]:
+        deadline = None if max_seconds is None else time.perf_counter() + max_seconds
         output: list[dict[str, float | int | str]] = []
         for _ in range(updates):
             role = self.active_role()
@@ -131,6 +140,7 @@ class SelfPlayTrainer:
             metrics: dict[str, float | int | str] = {
                 "update": self.update_index,
                 "role": role,
+                "attacker_controller": self.ppo.attacker_controller,
                 "environment_steps": transitions,
                 "steps_per_second": round(transitions / max(elapsed, 1.0e-9), 1),
                 "attacker_reward_mean": float(rollout["attacker_rewards"].mean()),
@@ -152,7 +162,7 @@ class SelfPlayTrainer:
             self.update_index += 1
             if self.update_index % self.ppo.snapshot_interval == 0:
                 self.save_checkpoint(self.checkpoint_directory / f"update-{self.update_index:06d}.pt")
-            if self.stop_requested:
+            if self.stop_requested or (deadline is not None and time.perf_counter() >= deadline):
                 break
         return output
 
@@ -197,6 +207,8 @@ class SelfPlayTrainer:
         return result
 
     def _sample_historical_opponent(self, active_role: str):
+        if self.ppo.attacker_controller == "planner":
+            return None, None
         if self.update_index < self.ppo.bootstrap_updates:
             return None, None
         if random.random() >= self.ppo.historical_opponent_probability:
@@ -209,7 +221,8 @@ class SelfPlayTrainer:
         if not path.is_file():
             return None, None
         payload = self.torch.load(path, map_location=self.device, weights_only=False)
-        model = make_policy(policy_specs()[opponent_role]).to(self.device)
+        config = PPOConfig(**payload["ppo"])
+        model = make_policy(policy_specs()[opponent_role], config.architecture, config.spike_steps).to(self.device)
         model.load_state_dict(payload[opponent_role])
         model.eval()
         return entry, model
@@ -266,7 +279,10 @@ class SelfPlayTrainer:
                     interceptor_actions = ia.reshape(self.simulator_config.num_envs, MAX_DEFENDERS, 2).cpu().numpy()
                     interceptor_log_probs = ilog.reshape(self.simulator_config.num_envs, MAX_DEFENDERS).cpu().numpy()
                     interceptor_actions *= masks[..., None]
-                if scripted_attacker:
+                if self.ppo.attacker_controller == "planner":
+                    attacker_actions = planning_attacker_actions(attacker_obs)
+                    attacker_log_probs = np.zeros(self.simulator_config.num_envs, np.float32)
+                elif scripted_attacker:
                     attacker_actions = straight_attacker_actions(self.simulator_config.num_envs)
                     attacker_log_probs = np.zeros(self.simulator_config.num_envs, np.float32)
                 else:
@@ -462,7 +478,7 @@ class SelfPlayTrainer:
         self.current_rating = payload.get("current_rating", self.current_rating)
 
 
-def evaluate_policies(interceptor, attacker, simulator: SimulatorConfig, episodes: int, device: str) -> dict[str, Any]:
+def evaluate_policies(interceptor, attacker, simulator: SimulatorConfig, episodes: int, device: str, attacker_controller: str = "learned") -> dict[str, Any]:
     torch = require_torch()
     env = VectorEnv(simulator)
     results = {"interceptor_wins": 0, "attacker_goals": 0, "timeouts": 0, "clean_goals": 0, "episodes": 0}
@@ -472,8 +488,12 @@ def evaluate_policies(interceptor, attacker, simulator: SimulatorConfig, episode
             iobs_t = torch.as_tensor(iobs, device=device)
             aobs_t = torch.as_tensor(aobs, device=device)
             ia, _ = interceptor.actor.sample(iobs_t.reshape(-1, iobs_t.shape[-1]), deterministic=True)
-            aa, _ = attacker.actor.sample(aobs_t, deterministic=True)
-        stepped = env.step(ia.reshape(simulator.num_envs, MAX_DEFENDERS, 2).cpu().numpy(), aa.cpu().numpy())
+            if attacker_controller == "planner":
+                attacker_actions = planning_attacker_actions(aobs)
+            else:
+                aa, _ = attacker.actor.sample(aobs_t, deterministic=True)
+                attacker_actions = aa.cpu().numpy()
+        stepped = env.step(ia.reshape(simulator.num_envs, MAX_DEFENDERS, 2).cpu().numpy(), attacker_actions)
         done = stepped["terminated"] | stepped["truncated"]
         for index in np.flatnonzero(done):
             if results["episodes"] >= episodes:

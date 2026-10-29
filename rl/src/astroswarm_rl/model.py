@@ -15,13 +15,49 @@ def require_torch():
     return torch
 
 
-def _classes():
+def _classes(architecture: str = "mlp", spike_steps: int = 8):
     torch = require_torch()
     nn = torch.nn
+
+    class Spike(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, voltage):
+            ctx.save_for_backward(voltage)
+            return (voltage >= 0).to(voltage.dtype)
+
+        @staticmethod
+        def backward(ctx, gradient):
+            (voltage,) = ctx.saved_tensors
+            return gradient / (1.0 + 5.0 * voltage.abs()).square()
+
+    class SpikingTrunk(nn.Sequential):
+        """Two LIF layers; rate readout and local state per policy decision."""
+        def __init__(self):
+            super().__init__(nn.Linear(128, 128), nn.Identity(), nn.Linear(128, 128))
+            self.steps = spike_steps
+            self.beta = 0.9
+            self.threshold = 0.5
+
+        def forward(self, values):
+            current = self[0](values)
+            membrane1 = torch.zeros_like(current)
+            membrane2 = torch.zeros_like(current)
+            count = torch.zeros_like(current)
+            for _ in range(self.steps):
+                membrane1 = self.beta * membrane1 + current
+                spikes1 = Spike.apply(membrane1 - self.threshold)
+                membrane1 = membrane1 - spikes1.detach() * self.threshold
+                membrane2 = self.beta * membrane2 + self[2](spikes1)
+                spikes2 = Spike.apply(membrane2 - self.threshold)
+                membrane2 = membrane2 - spikes2.detach() * self.threshold
+                count = count + spikes2
+            return count / self.steps
 
     class EntityActor(nn.Module):
         def __init__(self, obs_dim: int, self_dim: int, entity_count: int, entity_dim: int, mask_index: int) -> None:
             super().__init__()
+            self.architecture = architecture
+            self.spike_steps = spike_steps
             self.obs_dim = obs_dim
             self.self_dim = self_dim
             self.entity_count = entity_count
@@ -34,6 +70,8 @@ def _classes():
             self.trunk = nn.Sequential(
                 nn.Linear(128, 128), nn.Tanh(), nn.Linear(128, 128), nn.Tanh()
             )
+            if architecture == "snn":
+                self.trunk = SpikingTrunk()
             self.mean = nn.Linear(128, 2)
             self.log_std = nn.Parameter(torch.full((2,), -0.5))
 
@@ -97,8 +135,12 @@ class PolicySpec:
     global_dim: int
 
 
-def make_policy(spec: PolicySpec):
-    EntityActor, ActorCritic = _classes()
+def make_policy(spec: PolicySpec, architecture: str = "mlp", spike_steps: int = 8):
+    if architecture not in ("mlp", "snn"):
+        raise ValueError(f"Unknown policy architecture: {architecture}")
+    if not isinstance(spike_steps, int) or spike_steps < 1:
+        raise ValueError("spike_steps must be a positive integer")
+    EntityActor, ActorCritic = _classes(architecture, spike_steps)
     return ActorCritic(
         EntityActor(spec.obs_dim, spec.self_dim, spec.entity_count, spec.entity_dim, spec.mask_index),
         spec.global_dim,

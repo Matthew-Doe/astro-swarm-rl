@@ -14,6 +14,7 @@ import numpy as np
 
 from .artifacts import export_actor
 from .env import MAX_DEFENDERS, SimulatorConfig, VectorEnv
+from .planner import planning_attacker_actions
 from .league import League
 from .model import make_policy, policy_specs, require_torch
 from .training import PPOConfig, SelfPlayTrainer, evaluate_policies
@@ -108,7 +109,7 @@ def command_train(args) -> int:
     signal.signal(signal.SIGINT, request_stop)
     if args.resume:
         trainer.load_checkpoint(args.resume)
-    for metrics in trainer.train(args.updates):
+    for metrics in trainer.train(args.updates, max_seconds=args.minutes * 60 if args.minutes else None):
         print(json.dumps(metrics, sort_keys=True), flush=True)
     final = trainer.checkpoint_directory / "final.pt"
     trainer.save_checkpoint(final)
@@ -120,8 +121,9 @@ def _load_models(checkpoint: Path, device: str):
     torch = require_torch()
     payload = torch.load(checkpoint, map_location=device, weights_only=False)
     specs = policy_specs()
-    interceptor = make_policy(specs["interceptor"]).to(device)
-    attacker = make_policy(specs["attacker"]).to(device)
+    config = PPOConfig(**payload["ppo"])
+    interceptor = make_policy(specs["interceptor"], config.architecture, config.spike_steps).to(device)
+    attacker = make_policy(specs["attacker"], config.architecture, config.spike_steps).to(device)
     interceptor.load_state_dict(payload["interceptor"])
     attacker.load_state_dict(payload["attacker"])
     interceptor.eval(); attacker.eval()
@@ -133,7 +135,7 @@ def command_evaluate(args) -> int:
     simulator = SimulatorConfig(**payload["simulator"])
     simulator.num_envs = min(args.episodes, args.envs)
     simulator.seed = args.seed
-    print(json.dumps(evaluate_policies(interceptor, attacker, simulator, args.episodes, args.device), indent=2))
+    print(json.dumps(evaluate_policies(interceptor, attacker, simulator, args.episodes, args.device, payload["ppo"].get("attacker_controller", "learned")), indent=2))
     return 0
 
 
@@ -142,7 +144,11 @@ def command_export(args) -> int:
     specs = policy_specs()
     profile = payload["simulator"]["profile"]
     export_actor(interceptor, specs["interceptor"], args.output / "interceptor.policy.json", profile, simulator=payload["simulator"])
-    export_actor(attacker, specs["attacker"], args.output / "attacker.policy.json", profile, simulator=payload["simulator"])
+    if payload["ppo"].get("attacker_controller", "learned") == "planner":
+        (args.output / "attacker-controller.json").write_text(json.dumps({"controller": "planner", "runtime": "astroswarm_rl.planner", "godot_supported": False}) + "\n")
+        print("Exported interceptor only; planner attacker runs in Python, not Godot.")
+    else:
+        export_actor(attacker, specs["attacker"], args.output / "attacker.policy.json", profile, simulator=payload["simulator"])
     print(args.output)
     return 0
 
@@ -175,9 +181,12 @@ def command_record(args) -> int:
                     torch.as_tensor(interceptor_obs, device=args.device).reshape(-1, interceptor_obs.shape[-1]),
                     deterministic=True,
                 )
-                attacker_action, _ = attacker.actor.sample(
-                    torch.as_tensor(attacker_obs, device=args.device), deterministic=True,
-                )
+                if payload["ppo"].get("attacker_controller", "learned") == "planner":
+                    attacker_action = torch.as_tensor(planning_attacker_actions(attacker_obs))
+                else:
+                    attacker_action, _ = attacker.actor.sample(
+                        torch.as_tensor(attacker_obs, device=args.device), deterministic=True,
+                    )
             ia = interceptor_action.reshape(1, MAX_DEFENDERS, 2).cpu().numpy()
             aa = attacker_action.cpu().numpy()
             ia *= masks[..., None]
@@ -213,6 +222,7 @@ def _add_training_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--checkpoint-dir", type=Path)
     parser.add_argument("--updates", type=int, default=100)
+    parser.add_argument("--minutes", type=float, help="stop after this training duration, finishing the current update")
     parser.add_argument("--envs", type=int)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--seed", type=int, default=1)

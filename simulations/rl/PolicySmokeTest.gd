@@ -16,5 +16,8 @@ func _initialize() -> void:
 		return
 	var observation := PackedFloat32Array()
 	observation.resize(int(policy.observation["obs_dim"]))
+	if arguments.size() > 1:
+		var supplied: Array = JSON.parse_string(FileAccess.get_file_as_string(arguments[1]))
+		observation = PackedFloat32Array(supplied)
 	print("POLICY_RESULT=", JSON.stringify(policy.act(observation)))
 	quit()

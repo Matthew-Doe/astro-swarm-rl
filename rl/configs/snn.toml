@@ -1,0 +1,33 @@
+[simulator]
+num_envs = 256
+threads = 8
+profile = "balanced_self_play"
+action_repeat = 4
+episode_seconds = 30.0
+min_defenders = 1
+max_defenders = 6
+primary_five_mix = true
+collisions = false
+defender_fov_min_degrees = 35.0
+defender_fov_max_degrees = 75.0
+defender_camp_radius = 180.0
+defender_camp_penalty = 0.001
+seed = 1
+
+[ppo]
+architecture = "snn"
+spike_steps = 8
+rollout_steps = 128
+gamma = 0.995
+gae_lambda = 0.95
+clip = 0.2
+learning_rate = 0.0003
+entropy_coefficient = 0.01
+value_coefficient = 0.5
+max_grad_norm = 0.5
+epochs = 4
+minibatch_size = 2048
+phase_updates = 10
+snapshot_interval = 10
+bootstrap_updates = 4
+historical_opponent_probability = 0.25

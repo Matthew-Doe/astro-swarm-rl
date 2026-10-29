@@ -114,6 +114,8 @@ func _reset_match() -> void:
 			"view": 180.0 if arena_profile == "farp_parity" else 180.0 + 120.0 * sensor_budget,
 			"fov": deg_to_rad(50.0 if arena_profile == "farp_parity" else lerpf(defender_fov_max_degrees, defender_fov_min_degrees, sensor_budget)),
 			"sees": false,
+			"last_attacker": Vector4.ZERO,
+			"last_attacker_age": 0,
 			"previous": Vector2.ZERO,
 		})
 		interceptor_actions.append(Vector2(1.0, -0.625))
@@ -189,6 +191,13 @@ func _can_see(defender: Dictionary, target: Vector2) -> bool:
 func _update_detection() -> void:
 	for defender in defenders:
 		defender["sees"] = _can_see(defender, attacker["position"])
+		if defender["sees"]:
+			var offset: Vector2 = (attacker["position"] - defender["position"]) / SPAWN_RADIUS
+			var velocity: Vector2 = (attacker["velocity"] - defender["velocity"]) / 400.0
+			defender["last_attacker"] = Vector4(offset.x, offset.y, velocity.x, velocity.y)
+			defender["last_attacker_age"] = 0
+		else:
+			defender["last_attacker_age"] = mini(255, int(defender["last_attacker_age"]) + 1)
 		detected = detected or defender["sees"]
 
 
@@ -244,6 +253,12 @@ func _self_observation(ship: Dictionary) -> PackedFloat32Array:
 func _interceptor_observation(index: int) -> PackedFloat32Array:
 	var observer: Dictionary = defenders[index]
 	var result := _self_observation(observer)
+	if interceptor_policy == null or int(interceptor_policy.observation["self_dim"]) == 17:
+		var memory: Vector4 = observer["last_attacker"]
+		result.append_array(PackedFloat32Array([
+			memory.x, memory.y, memory.z, memory.w,
+			minf(1.0, float(observer["last_attacker_age"]) / 120.0),
+		]))
 	for slot in MAX_DEFENDERS:
 		var target: Dictionary
 		var enemy := slot == 0

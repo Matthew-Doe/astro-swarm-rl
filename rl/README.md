@@ -114,3 +114,68 @@ as rewarding approach. Finished environments clear all per-step reward metrics.
 ```bash
 ./rl/scripts/train-on-hdd.sh reward_defense --config rl/configs/reward_defense.toml --updates 100
 ```
+
+## Experimental spiking actor
+
+To try a hybrid spiking neural network with the existing PPO learner:
+
+```bash
+rl/.venv/bin/astroswarm-rl train --config rl/configs/snn.toml \
+  --run-dir rl/runs/snn-first --updates 100
+```
+
+Use `--device cpu --envs 4 --updates 2` for a small CPU trial. The preset starts
+with 256 environments and 2048-sample minibatches to limit the memory used by
+backpropagation through eight internal spike steps. Existing configs still use
+`architecture = "mlp"`; set `[ppo] architecture = "snn"` and `spike_steps = 8`
+in another preset to use the same simulator and rewards for comparisons.
+
+This is a hybrid actor: the entity/self encoders remain analog, two hidden
+layers use leaky integrate-and-fire neurons (decay 0.9, threshold 0.5), and a
+linear readout maps mean spike rates to continuous actions. The value network
+remains analog. Hard spikes use a fast-sigmoid surrogate derivative during
+training, with detached subtractive reset. Membranes start at zero on every
+policy decision; this provides internal spike dynamics, not episode memory,
+and keeps shuffled PPO minibatches consistent with rollout inference.
+
+Architecture settings are saved in checkpoints and restored by resume,
+evaluate, record, and historical-opponent loading. Export produces version 2
+policies for SNNs, supported by the Godot arena; MLP exports retain version 1.
+No additional Python dependencies are needed. This experiment does not imply
+better win rates or lower GPU power use: compare held-out opponents and wall
+clock training time with the MLP under matching settings before choosing one.
+
+### Train SNN interceptors against a planner
+
+```bash
+rl/.venv/bin/astroswarm-rl train --config rl/configs/snn_planner.toml \
+  --run-dir rl/runs/snn-planner --updates 100000 --minutes 15
+```
+
+This preset uses the defensive reward settings and trains only interceptors.
+The deterministic attacker replans every decision, scoring nine steering paths
+across a two-second horizon for goal progress, predicted defender proximity,
+and arena boundaries. It uses the learned attacker's global observations and
+approximates speed and turn rate by profile midpoints. Its parameters never
+learn. Set `attacker_controller = "planner"` under `[ppo]` to enable this in
+other configs. Evaluation and recording restore this controller from the
+checkpoint. Godot export includes only the trained interceptor and a controller
+manifest: this Python planner is not implemented in the Godot arena.
+
+`--minutes` finishes the current update after the time limit, then saves
+`checkpoints/final.pt`; periodic snapshots and `metrics.jsonl` are also written.
+
+### Open a checkpoint in Godot
+
+```bash
+./rl/scripts/view-checkpoint.sh rl/runs/YOUR_RUN
+# Or select a particular snapshot:
+./rl/scripts/view-checkpoint.sh rl/runs/YOUR_RUN/checkpoints/update-000100.pt --seed=9001
+```
+
+A run directory selects `final.pt` when available, otherwise its latest numbered
+snapshot, so you can watch a run while training continues. The helper exports
+both actors to temporary JSON files and opens the spectator arena. Space pauses
+and R resets; `--defenders=1` through `6` changes team size. Python-planner
+checkpoints are rejected because the Godot arena does not implement that
+controller. For a headless check, add `--headless --headless-match`.

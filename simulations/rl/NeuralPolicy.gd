@@ -53,7 +53,7 @@ func act(features: PackedFloat32Array) -> Vector2:
 	var joined := PackedFloat32Array()
 	joined.append_array(self_encoded)
 	joined.append_array(pooled)
-	var hidden := _stack(joined, network["trunk"])
+	var hidden := _spiking(joined) if network.has("spiking") else _stack(joined, network["trunk"])
 	var action := _dense(hidden, network["output"])
 	return Vector2(action[0], action[1])
 
@@ -79,3 +79,35 @@ func _dense(values: PackedFloat32Array, layer: Dictionary) -> PackedFloat32Array
 			value += float(weights[offset + column]) * values[column]
 		output[row] = tanh(value) if layer.get("activation", "") == "tanh" else value
 	return output
+
+
+func _spiking(values: PackedFloat32Array) -> PackedFloat32Array:
+	var settings: Dictionary = network["spiking"]
+	var layers: Array = network["trunk"]
+	var current := _dense(values, layers[0])
+	var membrane1 := PackedFloat32Array()
+	var membrane2 := PackedFloat32Array()
+	var count := PackedFloat32Array()
+	membrane1.resize(current.size())
+	membrane2.resize(int(layers[1]["output"]))
+	count.resize(membrane2.size())
+	var steps := int(settings["steps"])
+	var beta := float(settings["beta"])
+	var threshold := float(settings["threshold"])
+	for tick in steps:
+		var spikes := PackedFloat32Array()
+		spikes.resize(current.size())
+		for index in current.size():
+			membrane1[index] = beta * membrane1[index] + current[index]
+			if membrane1[index] >= threshold:
+				spikes[index] = 1.0
+				membrane1[index] -= threshold
+		var next_current := _dense(spikes, layers[1])
+		for index in membrane2.size():
+			membrane2[index] = beta * membrane2[index] + next_current[index]
+			if membrane2[index] >= threshold:
+				count[index] += 1.0
+				membrane2[index] -= threshold
+	for index in count.size():
+		count[index] /= steps
+	return count

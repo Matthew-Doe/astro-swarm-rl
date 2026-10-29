@@ -54,6 +54,15 @@ def export_actor(model, spec: PolicySpec, destination: Path, profile: str, *, si
         },
         "normalization": {"kind": "fixed", "coordinates": "planet-centered-and-scaled"},
     }
+    if actor.architecture == "snn":
+        payload["version"] = 2
+        payload["network"]["spiking"] = {
+            "steps": actor.spike_steps,
+            "beta": actor.trunk.beta,
+            "threshold": actor.trunk.threshold,
+        }
+        for layer in payload["network"]["trunk"]:
+            layer["activation"] = "linear"
     if simulator is not None:
         payload["simulator"] = simulator
     canonical = json.dumps(payload, separators=(",", ":"), sort_keys=True)
