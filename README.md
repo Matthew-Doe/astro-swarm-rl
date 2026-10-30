@@ -1,5 +1,7 @@
 # AstroSwarm
 
+This project is derived from [GMU-ASRC/astro-swarm](https://github.com/GMU-ASRC/astro-swarm). Credit for the original AstroSwarm project belongs to its upstream authors and contributors. This version adds reinforcement learning training and evaluation tools; see [the RL documentation](rl/README.md).
+
 [![Godot](https://img.shields.io/badge/Godot-4.6.3-478CBF?logo=godotengine&logoColor=white)](https://godotengine.org/)
 [![Language](https://img.shields.io/badge/language-GDScript-355570)](https://docs.godotengine.org/en/stable/tutorials/scripting/gdscript/)
 [![Platform](https://img.shields.io/badge/platform-linux%20%7C%20windows%20%7C%20macOS-lightgrey)](#building-from-source)
